@@ -26,10 +26,12 @@ class TransformersModel(BaseModel):
         
         self.model: PreTrainedModel = AutoModelForCausalLM.from_pretrained(model_name)
         self.tokenizer: PreTrainedTokenizer = AutoTokenizer.from_pretrained(model_name)
+        device = device or self._get_default_device()
         self.model.to(self.device)
         self.model.eval()
         
         # Set up activation collection
+        self.activation_points = activation_points
         if activation_points:
             self._setup_activation_hooks(activation_points)
     
@@ -51,7 +53,18 @@ class TransformersModel(BaseModel):
                 
             hook = ActivationHook(layer, point, self.activation_storage)
             self.hooks.append(hook)
-    
+
+    def __enter__(self):
+        """Context manager entry - ensure hooks are set up"""
+        if self.activation_points:
+            self._setup_activation_hooks(self.activation_points)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit with cleanup"""
+        self.remove_hooks()
+        self.clear_activations()
+        
     def forward(self, input_text: str) -> Dict[str, Any]:
         """Run forward pass through the model.
         
