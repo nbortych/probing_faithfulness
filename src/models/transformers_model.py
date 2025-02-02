@@ -1,10 +1,9 @@
-from typing import Dict, List, Any, Optional, Callable
+from typing import Dict, List, Any, Optional
 import torch
-from torch import Tensor
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 
-from .base_model import BaseModel
-from .activation_hooks import ActivationHook
+from models.base_model import BaseModel
+from models.activation_hooks import ActivationHook
 
 class TransformersModel(BaseModel):
     """Wrapper for Hugging Face Transformers models with activation collection."""
@@ -77,7 +76,7 @@ class TransformersModel(BaseModel):
                 - 'tokens': Input tokens
                 - 'activations': Collected activations (if hooks are set up)
         """
-        tokens = self.tokenizer(input_text, return_tensors="pt").to(self.device)
+        tokens = self.tokenizer(input_text, return_tensors="pt", padding= True).to(self.device)
         
         with torch.no_grad():
             outputs = self.model(**tokens)
@@ -100,3 +99,18 @@ class TransformersModel(BaseModel):
         
         _recurse_model(self.model)
         return points
+    
+
+if __name__ == "__main__":
+    # Test the TransformersModel class
+    model = TransformersModel("deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
+    print(model.get_activation_points())
+    with model:
+        output = model.forward("Hello, world!")
+        print(output['output'].shape)
+        print(output['activations'].keys())
+        # print(output['activations']['transformer.h.0'])
+    model.remove_hooks()
+    model.clear_activations()
+    print(model.activation_storage)
+    print(model.hooks)

@@ -1,14 +1,16 @@
 from typing import Dict, List, Tuple, Optional
+import logging
 import torch
 from torch import Tensor, nn
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
 class ActivationDataset(Dataset):
     """Dataset for storing model activations with faithfulness labels."""
     
-    def __init__(self, activations: List[Tensor], labels: List[bool]):
+    def __init__(self, activations: Tensor, labels: List[bool]):
         """Initialize the dataset.
         
         Args:
@@ -55,23 +57,71 @@ class FaithfulnessProbe:
         self.best_layer: Optional[str] = None
         self.best_accuracy: float = 0.0
         
-    def prepare_activation_data(self, 
-                              activation_dict: Dict[str, Dict[str, Tensor]],
-                              labels: List[bool]) -> Dict[str, ActivationDataset]:
-        """Prepare activation data for each layer.
+
+    def pool_sequence_activations(
+        self,
+        activations: torch.Tensor,
+        method: str = "mean"
+    ) -> torch.Tensor:
+        """
+        Pool transformer activations along the sequence dimension.
         
         Args:
-            activation_dict: Dictionary of activations for each layer
-            labels: Corresponding faithfulness labels
-            
+            activations: Tensor of shape (seq_len, hidden_dim)
+            method: Pooling method - "mean" or "last"
+        
         Returns:
-            Dictionary mapping layer names to ActivationDataset objects
+            Pooled tensor of shape (hidden_dim,)
         """
+        if method == "mean":
+            return activations.mean(dim=0)  # Average across sequence length
+        elif method == "last":
+            return activations[-1, :]       # Take last token's activations
+        else:
+            raise ValueError(f"Invalid pooling method: {method}. Choose 'mean' or 'last'.")
+        
+    
+    def prepare_activation_data(self, 
+                          activation_dict: Dict[str, Dict[str, Tensor]],
+                          labels: List[bool], pooling_method: str = "last") -> Dict[str, ActivationDataset]:
+        """Prepare activation data for each layer."""
         datasets = {}
         for layer_name, layer_acts in activation_dict.items():
-            # Average pooling over sequence length if needed
-            acts = layer_acts.mean(dim=1) if len(layer_acts.shape) > 2 else layer_acts
-            datasets[layer_name] = ActivationDataset(acts, labels)
+            acts_list = []
+            for act in layer_acts:
+                if isinstance(act, torch.Tensor):
+                    pooled = self.pool_sequence_activations(act, method=pooling_method)
+                elif isinstance(act, (list,dict)):
+                    if isinstance(act, dict):
+                        act = list(act.values())
+                    tensors = [t for t in act if isinstance(t, torch.Tensor)]
+                    if not tensors:
+                        continue
+                    concatenated = torch.cat(tensors, dim=-1)
+                    pooled = self.pool_sequence_activations(concatenated, method=pooling_method)
+                else:
+                    logger.info(f"Skipping activation of type {type(act)}")
+                    continue
+                acts_list.append(pooled)
+            
+            if not acts_list:
+                logger.info(f"Warning: No valid tensors found for layer {layer_name}")
+                continue
+                
+            # Stack tensors along batch dimension
+            if acts_list:
+                try:
+                    acts = torch.stack(acts_list)
+                        
+                    datasets[layer_name] = ActivationDataset(acts, labels)
+                except Exception as e:
+                    logger.info(f"Error processing layer {layer_name}: {str(e)}")
+                    logger.info(f"Shapes of tensors in acts_list: {[a.shape for a in acts_list]}")
+                    raise
+                    
+        if not datasets:
+            raise ValueError("No valid datasets created from activations")
+            
         return datasets
     
     def train_probe(self, 
@@ -155,7 +205,7 @@ class FaithfulnessProbe:
         for layer_name, dataset in datasets.items():
             probe, accuracy = self.train_probe(dataset, **train_kwargs)
             self.probes[layer_name] = probe
-            
+            logger.info(f"Layer {layer_name}: Validation accuracy = {accuracy}")
             if accuracy > self.best_accuracy:
                 self.best_accuracy = accuracy
                 self.best_layer = layer_name

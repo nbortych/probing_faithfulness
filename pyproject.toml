@@ -12,6 +12,7 @@ dependencies = [
     "ruff>=0.9.1",
     "safetensors>=0.5.2",
     "scikit-learn>=1.6.1",
+    "seaborn>=0.13.2",
     "setuptools>=75.8.0",
     "torch>=2.5.1",
     "torchaudio>=2.5.1",
